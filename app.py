@@ -1,4 +1,6 @@
 import os
+import csv
+import io
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from googleapiclient.discovery import build
@@ -75,16 +77,37 @@ except Exception as e:
 def fetch_transcript(video_id):
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        available_languages = [t.language_code for t in transcript_list]
+        app.logger.info(f"Available transcript languages for video {video_id}: {available_languages}")
+
+        # Try English transcripts first
         transcript = None
         for t in transcript_list:
-            if t.language_code in ['en', 'en-US', 'en-GB']:
+            if t.language_code.startswith('en'):
                 transcript = t
                 break
+
+        # If no English, try any available transcript
         if not transcript:
-            transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
-        text = ' '.join([entry['text'] for entry in transcript.fetch()])
-        app.logger.info(f"Fetched transcript for video {video_id}, type={'generated' if transcript.is_generated else 'manual'}, length={len(text)}")
-        return text
+            for t in transcript_list:
+                transcript = t
+                break
+
+        # If still none, try generated transcripts
+        if not transcript:
+            try:
+                transcript = transcript_list.find_generated_transcript(available_languages)
+            except NoTranscriptFound:
+                pass
+
+        if transcript:
+            entries = transcript.fetch()
+            text = ' '.join([entry['text'] for entry in entries])
+            app.logger.info(f"Fetched transcript for video {video_id}, language={transcript.language_code}, type={'generated' if transcript.is_generated else 'manual'}, length={len(text)}")
+            return entries
+        else:
+            app.logger.warning(f"No suitable transcript found for video {video_id}")
+            return None
     except (NoTranscriptFound, TranscriptsDisabled) as e:
         app.logger.warning(f"No transcript available for video {video_id}: {e}")
         return None
@@ -160,7 +183,7 @@ def test_transcript():
             response = youtube.search().list(
                 part='id,snippet',
                 channelId=channel_id,
-                maxResults=5,  # Limit to 5 to reduce API calls
+                maxResults=10,  # Increase to improve chances
                 type='video'
             ).execute()
             for item in response.get('items', []):
@@ -173,16 +196,27 @@ def test_transcript():
             app.logger.error(f"YouTube API error fetching videos: {e}")
             return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
 
-        # Try fetching transcript for first video
+        # Try fetching transcript
         for video in videos:
             video_id = video['videoId']
-            transcript = fetch_transcript(video_id)
-            if transcript:
-                # Return transcript as downloadable file
+            transcript_entries = fetch_transcript(video_id)
+            if transcript_entries:
+                output = io.StringIO()
+                writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+                writer.writerow(['video_id', 'title', 'timestamp', 'text'])
+                for entry in transcript_entries:
+                    writer.writerow([
+                        video_id,
+                        video['title'],
+                        entry.get('start', 0),
+                        entry.get('text', '')
+                    ])
+                csv_data = output.getvalue()
+                output.close()
                 return Response(
-                    transcript,
-                    mimetype='text/plain',
-                    headers={'Content-Disposition': f'attachment; filename=transcript_{video_id}.txt'}
+                    csv_data,
+                    mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename=transcript_{video_id}.csv'}
                 )
             app.logger.info(f"No transcript for video {video_id}, trying next")
 
@@ -243,8 +277,9 @@ def search():
                 c.execute('SELECT transcript FROM transcripts WHERE video_id = %s', (video_id,))
                 row = c.fetchone()
                 if not row:
-                    transcript = fetch_transcript(video_id)
-                    if transcript:
+                    transcript_entries = fetch_transcript(video_id)
+                    if transcript_entries:
+                        transcript = ' '.join([entry['text'] for entry in transcript_entries])
                         try:
                             c.execute('''INSERT INTO transcripts (video_id, channel_id, title, date, transcript)
                                          VALUES (%s, %s, %s, %s, %s)
