@@ -8,7 +8,11 @@ import re
 from urllib.parse import urlparse
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://youtube-transcript-search-1.onrender.com"]}})
+CORS(app, resources={r"/*": {
+    "origins": ["http://localhost:5173", "https://youtube-transcript-search-1.onrender.com"],
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type"]
+}})
 
 # YouTube API setup
 youtube_api_key = os.getenv('YOUTUBE_API_KEY')
@@ -60,8 +64,10 @@ except Exception as e:
     print(f"Failed to initialize database: {e}")
     raise
 
-@app.route('/find-channel-id', methods=['POST'])
+@app.route('/find-channel-id', methods=['POST', 'OPTIONS'])
 def find_channel_id():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     data = request.get_json()
     handle = data.get('handle')
     if not handle:
@@ -80,7 +86,6 @@ def find_channel_id():
             channel_id = response['items'][0]['snippet']['channelId']
             conn = get_db_connection()
             c = conn.cursor()
-            # Use INSERT ... ON CONFLICT DO UPDATE
             c.execute('''INSERT INTO channels (channel_id, handle)
                          VALUES (%s, %s)
                          ON CONFLICT (channel_id)
@@ -96,8 +101,10 @@ def find_channel_id():
     except Exception as e:
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
-@app.route('/search', methods=['POST'])
+@app.route('/search', methods=['POST', 'OPTIONS'])
 def search():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     data = request.get_json()
     channel_id = data.get('channelId')
     search_phrase = data.get('searchPhrase')
