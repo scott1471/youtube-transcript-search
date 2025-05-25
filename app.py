@@ -6,6 +6,7 @@ from googleapiclient.errors import HttpError
 import psycopg2
 import re
 from urllib.parse import urlparse
+from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {
@@ -64,6 +65,17 @@ except Exception as e:
     print(f"Failed to initialize database: {e}")
     raise
 
+def fetch_transcript(video_id):
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+        return ' '.join([entry['text'] for entry in transcript])
+    except NoTranscriptFound:
+        print(f"No transcript found for video {video_id}")
+        return None
+    except Exception as e:
+        print(f"Error fetching transcript for video {video_id}: {e}")
+        return None
+
 @app.route('/find-channel-id', methods=['POST', 'OPTIONS'])
 def find_channel_id():
     if request.method == 'OPTIONS':
@@ -74,7 +86,6 @@ def find_channel_id():
         return jsonify({'error': 'Handle is required'}), 400
 
     try:
-        # Search for channel by handle
         response = youtube.search().list(
             part='snippet',
             q=handle,
@@ -139,10 +150,25 @@ def search():
             if not next_page_token:
                 break
 
-        # Search transcripts
-        results = []
+        # Check and fetch transcripts
         conn = get_db_connection()
         c = conn.cursor()
+        for video in videos:
+            video_id = video['videoId']
+            c.execute('SELECT transcript FROM transcripts WHERE video_id = %s', (video_id,))
+            row = c.fetchone()
+            if not row:  # Transcript not in database
+                transcript = fetch_transcript(video_id)
+                if transcript:
+                    c.execute('''INSERT INTO transcripts (video_id, channel_id, title, date, transcript)
+                                 VALUES (%s, %s, %s, %s, %s)
+                                 ON CONFLICT (video_id) DO NOTHING''',
+                              (video_id, channel_id, video['title'], video['date'], transcript))
+                    conn.commit()
+                    print(f"Added transcript for video {video_id}: {video['title']}")
+
+        # Search transcripts
+        results = []
         for video in videos:
             video_id = video['videoId']
             c.execute('SELECT transcript FROM transcripts WHERE video_id = %s', (video_id,))
