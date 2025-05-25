@@ -17,6 +17,8 @@ function App() {
   const [clickedResultIndex, setClickedResultIndex] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'https://youtube-transcript-search.onrender.com';
+
   const handleFindChannelId = async () => {
     if (!handle) {
       setErrorMessage('Please enter a YouTube handle');
@@ -24,9 +26,9 @@ function App() {
     }
     setIsFindingChannel(true);
     setErrorMessage('');
-    setChannelId(''); // Clear channel ID input when searching new handle
+    setChannelId('');
     try {
-      const response = await axios.post('http://localhost:5001/find-channel-id', { handle });
+      const response = await axios.post(`${backendUrl}/find-channel-id`, { handle });
       setFoundChannelId(response.data.channelId);
       setChannelId(response.data.channelId);
       console.log('Found channel ID:', response.data.channelId);
@@ -45,7 +47,7 @@ function App() {
     setIsLoading(true);
     setErrorMessage('');
     try {
-      const response = await axios.post('http://localhost:5001/search', {
+      const response = await axios.post(`${backendUrl}/search`, {
         channelId,
         searchPhrase,
         startDate: startDate || undefined,
