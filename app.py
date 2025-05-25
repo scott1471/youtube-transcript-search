@@ -6,14 +6,16 @@ from googleapiclient.errors import HttpError
 import psycopg2
 import re
 from urllib.parse import urlparse
-from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
+from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {
     "origins": ["http://localhost:5173", "https://youtube-transcript-search-1.onrender.com"],
     "methods": ["GET", "POST", "OPTIONS"],
-    "allow_headers": ["Content-Type"]
-}})
+    "allow_headers": ["Content-Type"],
+    "expose_headers": ["Access-Control-Allow-Origin"],
+    "support_credentials": False
+}}, send_wildcard=False)
 
 # YouTube API setup
 youtube_api_key = os.getenv('YOUTUBE_API_KEY')
@@ -69,8 +71,8 @@ def fetch_transcript(video_id):
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
         return ' '.join([entry['text'] for entry in transcript])
-    except NoTranscriptFound:
-        print(f"No transcript found for video {video_id}")
+    except (NoTranscriptFound, TranscriptsDisabled):
+        print(f"No transcript available for video {video_id}")
         return None
     except Exception as e:
         print(f"Error fetching transcript for video {video_id}: {e}")
@@ -160,12 +162,16 @@ def search():
             if not row:  # Transcript not in database
                 transcript = fetch_transcript(video_id)
                 if transcript:
-                    c.execute('''INSERT INTO transcripts (video_id, channel_id, title, date, transcript)
-                                 VALUES (%s, %s, %s, %s, %s)
-                                 ON CONFLICT (video_id) DO NOTHING''',
-                              (video_id, channel_id, video['title'], video['date'], transcript))
-                    conn.commit()
-                    print(f"Added transcript for video {video_id}: {video['title']}")
+                    try:
+                        c.execute('''INSERT INTO transcripts (video_id, channel_id, title, date, transcript)
+                                     VALUES (%s, %s, %s, %s, %s)
+                                     ON CONFLICT (video_id) DO NOTHING''',
+                                  (video_id, channel_id, video['title'], video['date'], transcript))
+                        conn.commit()
+                        print(f"Added transcript for video {video_id}: {video['title']}")
+                    except Exception as e:
+                        print(f"Error inserting transcript for video {video_id}: {e}")
+                        conn.rollback()
 
         # Search transcripts
         results = []
@@ -191,8 +197,10 @@ def search():
         conn.close()
         return jsonify({'results': results})
     except HttpError as e:
+        print(f"YouTube API error: {e}")
         return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
     except Exception as e:
+        print(f"Server error: {e}")
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 if __name__ == '__main__':
