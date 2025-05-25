@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlparse
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://youtube-transcript-search.onrender.com"]}})
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://youtube-transcript-search-1.onrender.com"]}})
 
 # YouTube API setup
 youtube_api_key = os.getenv('YOUTUBE_API_KEY')
