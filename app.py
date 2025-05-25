@@ -72,7 +72,9 @@ except Exception as e:
 def fetch_transcript(video_id):
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        return ' '.join([entry['text'] for entry in transcript])
+        text = ' '.join([entry['text'] for entry in transcript])
+        app.logger.info(f"Fetched transcript for video {video_id}, length: {len(text)}")
+        return text
     except (NoTranscriptFound, TranscriptsDisabled):
         app.logger.info(f"No transcript available for video {video_id}")
         return None
@@ -132,13 +134,13 @@ def search():
         return jsonify({'error': 'Channel ID and search phrase are required'}), 400
 
     try:
-        # Fetch videos for the channel (limit to 10 videos to reduce memory)
+        # Fetch videos for the channel (limit to 10 videos)
         videos = []
         try:
             response = youtube.search().list(
                 part='id,snippet',
                 channelId=channel_id,
-                maxResults=10,  # Reduced from 50
+                maxResults=10,
                 type='video',
                 publishedAfter=start_date + 'T00:00:00Z' if start_date else None,
                 publishedBefore=end_date + 'T23:59:59Z' if end_date else None
@@ -150,6 +152,7 @@ def search():
                     'title': item['snippet']['title'],
                     'date': item['snippet']['publishedAt']
                 })
+            app.logger.info(f"Fetched {len(videos)} videos for channel {channel_id}")
         except HttpError as e:
             app.logger.error(f"YouTube API error fetching videos: {e}")
             return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
@@ -185,7 +188,8 @@ def search():
                 row = c.fetchone()
                 if row and row[0]:
                     transcript = row[0]
-                    matches = list(re.finditer(re.escape(search_phrase), transcript, re.IGNORECASE))
+                    # Relaxed matching: remove re.escape for simpler substring search
+                    matches = list(re.finditer(search_phrase, transcript, re.IGNORECASE))
                     if matches:
                         for match in matches:
                             start = max(0, match.start() - 50)
@@ -198,6 +202,7 @@ def search():
                                 'snippet': snippet,
                                 'matchCount': len(matches)
                             })
+            app.logger.info(f"Found {len(results)} search results for phrase '{search_phrase}'")
         except Exception as e:
             app.logger.error(f"Database or search error: {e}")
             return jsonify({'error': f'Server error: {str(e)}'}), 500
