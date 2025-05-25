@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlparse
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://your-frontend.onrender.com"]}})  # Update with frontend URL
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://youtube-transcript-search.onrender.com"]}})
 
 # YouTube API setup
 youtube_api_key = os.getenv('YOUTUBE_API_KEY')
@@ -68,13 +68,16 @@ def find_channel_id():
         return jsonify({'error': 'Handle is required'}), 400
 
     try:
-        response = youtube.channels().list(
-            part='id',
-            forHandle=handle
+        # Search for channel by handle
+        response = youtube.search().list(
+            part='snippet',
+            q=handle,
+            type='channel',
+            maxResults=1
         ).execute()
 
         if 'items' in response and len(response['items']) > 0:
-            channel_id = response['items'][0]['id']
+            channel_id = response['items'][0]['snippet']['channelId']
             conn = get_db_connection()
             c = conn.cursor()
             c.execute('INSERT INTO channels (channel_id, handle) VALUES (%s, %s) ON CONFLICT (channel_id) UPDATE SET handle = EXCLUDED.handle',
