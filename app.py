@@ -80,8 +80,12 @@ def find_channel_id():
             channel_id = response['items'][0]['snippet']['channelId']
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute('INSERT INTO channels (channel_id, handle) VALUES (%s, %s) ON CONFLICT (channel_id) UPDATE SET handle = EXCLUDED.handle',
-                      (channel_id, handle))
+            # Use INSERT ... ON CONFLICT DO UPDATE
+            c.execute('''INSERT INTO channels (channel_id, handle)
+                         VALUES (%s, %s)
+                         ON CONFLICT (channel_id)
+                         DO UPDATE SET handle = %s''',
+                      (channel_id, handle, handle))
             conn.commit()
             conn.close()
             return jsonify({'channelId': channel_id})
