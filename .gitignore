@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+transcripts.db
+*.pyc
+__pycache__/
+

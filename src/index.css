@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --navy: #1e2a44;
+  --gold: #d4a017;
+  --youtube-red: #FF0000;
+  --gradient-bg: linear-gradient(135deg, #1e2a44 0%, #2c3e50 100%);
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--gradient-bg);
+  color: var(--navy);
+}
+
+input, select {
+  transition: all 0.2s ease;
+  color: #000000; /* Black text for inputs */
+}
+
+input:focus, select:focus {
+  border-color: var(--gold);
+  outline: none;
+}
+
+button, .watch-button {
+  background-color: var(--gold); /* Visible gold background */
+  color: var(--navy); /* Navy text */
+  transition: background-color 0.2s ease;
+}
+
+button:hover:not(:disabled), .watch-button:hover:not(:disabled) {
+  background-color: #f1c40f; /* Brighter gold on hover */
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+iframe {
+  transition: all 0.2s ease;
+}
+
+.clicked {
+  border: 2px solid var(--navy);
+  background-color: #fff8e1; /* Light gold background */
+}
