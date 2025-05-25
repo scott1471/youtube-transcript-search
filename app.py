@@ -39,6 +39,7 @@ def get_db_connection():
             host=parsed_url.hostname,
             port=parsed_url.port
         )
+        conn.set_session(autocommit=False)  # Explicit transaction control
         app.logger.info("Database connection established")
         return conn
     except Exception as e:
@@ -122,10 +123,12 @@ def find_channel_id():
                              DO UPDATE SET handle = %s''',
                           (channel_id, handle, handle))
                 conn.commit()
-                conn.close()
                 app.logger.info(f"Inserted channel: {channel_id}, handle={handle}")
+                conn.close()
             except Exception as e:
                 app.logger.error(f"Database error inserting channel {channel_id}: {e}")
+                conn.rollback()
+                conn.close()
                 raise
             return jsonify({'channelId': channel_id})
         else:
@@ -225,9 +228,12 @@ def search():
                             })
                     app.logger.info(f"Checked video {video_id}: {len(matches)} matches for phrase '{search_phrase}'")
             app.logger.info(f"Total {len(results)} search results for channel {channel_id}")
+            conn.commit()
             return jsonify({'results': results})
         except Exception as e:
             app.logger.error(f"Database or search error: {e}")
+            if conn:
+                conn.rollback()
             return jsonify({'error': f'Server error: {str(e)}'}), 500
         finally:
             if conn:
