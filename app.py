@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -39,7 +39,7 @@ def get_db_connection():
             host=parsed_url.hostname,
             port=parsed_url.port
         )
-        conn.set_session(autocommit=False)  # Explicit transaction control
+        conn.set_session(autocommit=False)
         app.logger.info("Database connection established")
         return conn
     except Exception as e:
@@ -141,6 +141,57 @@ def find_channel_id():
         app.logger.error(f"Server error in find-channel-id: {e}")
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
+@app.route('/test-transcript', methods=['POST', 'OPTIONS'])
+def test_transcript():
+    if request.method == 'OPTIONS':
+        app.logger.info("Received OPTIONS request for /test-transcript")
+        return jsonify({}), 200
+    try:
+        data = request.get_json()
+        channel_id = data.get('channelId')
+        app.logger.info(f"test-transcript request: channel_id={channel_id}")
+        if not channel_id:
+            app.logger.warning("Channel ID is required")
+            return jsonify({'error': 'Channel ID is required'}), 400
+
+        # Fetch videos
+        videos = []
+        try:
+            response = youtube.search().list(
+                part='id,snippet',
+                channelId=channel_id,
+                maxResults=5,  # Limit to 5 to reduce API calls
+                type='video'
+            ).execute()
+            for item in response.get('items', []):
+                videos.append({
+                    'videoId': item['id']['videoId'],
+                    'title': item['snippet']['title']
+                })
+            app.logger.info(f"Fetched {len(videos)} videos for channel {channel_id}: {[v['videoId'] for v in videos]}")
+        except HttpError as e:
+            app.logger.error(f"YouTube API error fetching videos: {e}")
+            return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
+
+        # Try fetching transcript for first video
+        for video in videos:
+            video_id = video['videoId']
+            transcript = fetch_transcript(video_id)
+            if transcript:
+                # Return transcript as downloadable file
+                return Response(
+                    transcript,
+                    mimetype='text/plain',
+                    headers={'Content-Disposition': f'attachment; filename=transcript_{video_id}.txt'}
+                )
+            app.logger.info(f"No transcript for video {video_id}, trying next")
+
+        app.logger.warning("No transcripts available for any videos")
+        return jsonify({'error': 'No transcripts available for the selected videos'}), 404
+    except Exception as e:
+        app.logger.error(f"Server error in test-transcript: {e}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
 @app.route('/search', methods=['POST', 'OPTIONS'])
 def search():
     if request.method == 'OPTIONS':
@@ -159,7 +210,7 @@ def search():
             app.logger.warning("Channel ID and search phrase are required")
             return jsonify({'error': 'Channel ID and search phrase are required'}), 400
 
-        # Fetch videos for the channel
+        # Fetch videos
         videos = []
         try:
             response = youtube.search().list(
