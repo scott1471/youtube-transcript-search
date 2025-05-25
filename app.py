@@ -8,21 +8,21 @@ import re
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://your-frontend-domain.onrender.com"]}})  # Update with deployed frontend URL
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://your-frontend-domain.onrender.com"]}})  # Update with frontend URL
 
 # YouTube API setup
-youtube_api_key = os.getenv('AIzaSyCLcWj0LcrYPDvDyK05Pk1D67eqU2nivy8')
+youtube_api_key = os.getenv('YOUTUBE_API_KEY')
 youtube = build('youtube', 'v3', developerKey=youtube_api_key)
 
 # Database setup
-db_path = os.getenv('DB_PATH', 'transcripts.db')
+db_path = os.getenv('DB_PATH', '/var/data/transcripts.db')
 def init_db():
     with sqlite3.connect(db_path) as conn:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS channels
                      (channel_id TEXT PRIMARY KEY, handle TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS transcripts
-                     (video_id TEXT PRIMARY_KEY, channel_id TEXT, title TEXT, date TEXT, transcript TEXT)''')
+                     (video_id TEXT PRIMARY KEY, channel_id TEXT, title TEXT, date TEXT, transcript TEXT)''')
         conn.commit()
 
 init_db()
