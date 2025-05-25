@@ -21,7 +21,7 @@ CORS(app, resources={r"/*": {
 youtube_api_key = os.getenv('YOUTUBE_API_KEY')
 if not youtube_api_key:
     app.logger.error("YOUTUBE_API_KEY environment variable not set")
-    raise ValueError("YOUTUBE_API_KEY environment variable not set")
+    raise ValueError("YOUTUBE_API_KEY not set")
 youtube = build('youtube', 'v3', developerKey=youtube_api_key)
 
 # Database setup
@@ -30,7 +30,7 @@ def get_db_connection():
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
             app.logger.error("DATABASE_URL environment variable not set")
-            raise ValueError("DATABASE_URL environment variable not set")
+            raise ValueError("DATABASE_URL not set")
         parsed_url = urlparse(database_url)
         conn = psycopg2.connect(
             database=parsed_url.path[1:],
@@ -39,6 +39,7 @@ def get_db_connection():
             host=parsed_url.hostname,
             port=parsed_url.port
         )
+        app.logger.info("Database connection established")
         return conn
     except Exception as e:
         app.logger.error(f"Database connection error: {e}")
@@ -55,10 +56,11 @@ def init_db():
                       video_id TEXT NOT NULL UNIQUE,
                       channel_id TEXT,
                       title TEXT,
-                      date TEXT NOT NULL,
+                      date TEXT,
                       transcript TEXT)''')
         conn.commit()
         conn.close()
+        app.logger.info("Database initialized successfully")
     except Exception as e:
         app.logger.error(f"Database initialization failed: {e}")
         raise
@@ -71,27 +73,37 @@ except Exception as e:
 
 def fetch_transcript(video_id):
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        text = ' '.join([entry['text'] for entry in transcript])
-        app.logger.info(f"Fetched transcript for video {video_id}, length: {len(text)}")
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript = None
+        for t in transcript_list:
+            if t.language_code in ['en', 'en-US', 'en-GB']:
+                transcript = t
+                break
+        if not transcript:
+            transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
+        text = ' '.join([entry['text'] for entry in transcript.fetch()])
+        app.logger.info(f"Fetched transcript for video {video_id}, type={'generated' if transcript.is_generated else 'manual'}, length={len(text)}")
         return text
-    except (NoTranscriptFound, TranscriptsDisabled):
-        app.logger.info(f"No transcript available for video {video_id}")
+    except (NoTranscriptFound, TranscriptsDisabled) as e:
+        app.logger.warning(f"No transcript available for video {video_id}: {e}")
         return None
     except Exception as e:
-        app.logger.error(f"Error fetching transcript for video {video_id}: {e}")
+        app.logger.error(f"Error fetching transcript for {video_id}: {e}")
         return None
 
 @app.route('/find-channel-id', methods=['POST', 'OPTIONS'])
 def find_channel_id():
     if request.method == 'OPTIONS':
+        app.logger.info("Received OPTIONS request for /find-channel-id")
         return jsonify({}), 200
-    data = request.get_json()
-    handle = data.get('handle')
-    if not handle:
-        return jsonify({'error': 'Handle is required'}), 400
-
     try:
+        data = request.get_json()
+        handle = data.get('handle')
+        app.logger.info(f"find-channel-id request: handle={handle}")
+        if not handle:
+            app.logger.warning("Handle is required")
+            return jsonify({'error': 'Handle is required'}), 400
+
         response = youtube.search().list(
             part='snippet',
             q=handle,
@@ -101,46 +113,56 @@ def find_channel_id():
 
         if 'items' in response and len(response['items']) > 0:
             channel_id = response['items'][0]['snippet']['channelId']
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute('''INSERT INTO channels (channel_id, handle)
-                         VALUES (%s, %s)
-                         ON CONFLICT (channel_id)
-                         DO UPDATE SET handle = %s''',
-                      (channel_id, handle, handle))
-            conn.commit()
-            conn.close()
+            try:
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute('''INSERT INTO channels (channel_id, handle)
+                             VALUES (%s, %s)
+                             ON CONFLICT (channel_id)
+                             DO UPDATE SET handle = %s''',
+                          (channel_id, handle, handle))
+                conn.commit()
+                conn.close()
+                app.logger.info(f"Inserted channel: {channel_id}, handle={handle}")
+            except Exception as e:
+                app.logger.error(f"Database error inserting channel {channel_id}: {e}")
+                raise
             return jsonify({'channelId': channel_id})
         else:
+            app.logger.warning(f"Channel not found for handle={handle}")
             return jsonify({'error': 'Channel not found'}), 404
     except HttpError as e:
         app.logger.error(f"YouTube API error: {e}")
         return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
     except Exception as e:
-        app.logger.error(f"Server error: {e}")
+        app.logger.error(f"Server error in find-channel-id: {e}")
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/search', methods=['POST', 'OPTIONS'])
 def search():
     if request.method == 'OPTIONS':
+        app.logger.info("Received OPTIONS request for /search")
         return jsonify({}), 200
-    data = request.get_json()
-    channel_id = data.get('channelId')
-    search_phrase = data.get('searchPhrase')
-    start_date = data.get('startDate')
-    end_date = data.get('endDate')
-
-    if not channel_id or not search_phrase:
-        return jsonify({'error': 'Channel ID and search phrase are required'}), 400
-
     try:
-        # Fetch videos for the channel (limit to 10 videos)
+        data = request.get_json()
+        channel_id = data.get('channelId')
+        search_phrase = data.get('searchPhrase')
+        start_date = data.get('startDate')
+        end_date = data.get('endDate')
+
+        app.logger.info(f"Search request: channel_id={channel_id}, phrase={search_phrase}, start_date={start_date}, end_date={end_date}")
+
+        if not channel_id or not search_phrase:
+            app.logger.warning("Channel ID and search phrase are required")
+            return jsonify({'error': 'Channel ID and search phrase are required'}), 400
+
+        # Fetch videos for the channel
         videos = []
         try:
             response = youtube.search().list(
                 part='id,snippet',
                 channelId=channel_id,
-                maxResults=10,
+                maxResults=20,
                 type='video',
                 publishedAfter=start_date + 'T00:00:00Z' if start_date else None,
                 publishedBefore=end_date + 'T23:59:59Z' if end_date else None
@@ -152,7 +174,7 @@ def search():
                     'title': item['snippet']['title'],
                     'date': item['snippet']['publishedAt']
                 })
-            app.logger.info(f"Fetched {len(videos)} videos for channel {channel_id}")
+            app.logger.info(f"Fetched {len(videos)} videos for channel {channel_id}: {[v['videoId'] for v in videos]}")
         except HttpError as e:
             app.logger.error(f"YouTube API error fetching videos: {e}")
             return jsonify({'error': f'YouTube API error: {str(e)}'}), 500
@@ -166,7 +188,7 @@ def search():
                 video_id = video['videoId']
                 c.execute('SELECT transcript FROM transcripts WHERE video_id = %s', (video_id,))
                 row = c.fetchone()
-                if not row:  # Transcript not in database
+                if not row:
                     transcript = fetch_transcript(video_id)
                     if transcript:
                         try:
@@ -188,12 +210,11 @@ def search():
                 row = c.fetchone()
                 if row and row[0]:
                     transcript = row[0]
-                    # Relaxed matching: remove re.escape for simpler substring search
-                    matches = list(re.finditer(search_phrase, transcript, re.IGNORECASE))
+                    matches = list(re.finditer(re.escape(search_phrase), transcript, re.IGNORECASE))
                     if matches:
                         for match in matches:
-                            start = max(0, match.start() - 50)
-                            snippet = transcript[start:start + 100]
+                            start = match.start()
+                            snippet = transcript[max(0, start - 50):start + 50 + len(search_phrase)]
                             results.append({
                                 'videoId': video_id,
                                 'title': video['title'],
@@ -202,7 +223,9 @@ def search():
                                 'snippet': snippet,
                                 'matchCount': len(matches)
                             })
-            app.logger.info(f"Found {len(results)} search results for phrase '{search_phrase}'")
+                    app.logger.info(f"Checked video {video_id}: {len(matches)} matches for phrase '{search_phrase}'")
+            app.logger.info(f"Total {len(results)} search results for channel {channel_id}")
+            return jsonify({'results': results})
         except Exception as e:
             app.logger.error(f"Database or search error: {e}")
             return jsonify({'error': f'Server error: {str(e)}'}), 500
@@ -210,10 +233,8 @@ def search():
             if conn:
                 conn.close()
                 app.logger.info("Database connection closed")
-
-        return jsonify({'results': results})
     except Exception as e:
-        app.logger.error(f"Unexpected server error: {e}")
+        app.logger.error(f"Unexpected server error in search: {e}")
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 if __name__ == '__main__':
